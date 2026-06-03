@@ -76,44 +76,58 @@ def _extract_metadata(audio_path: Path) -> dict:
     return {"title": title, "artist": artist, "duration_sec": duration, "bpm_hint": bpm_hint}
 
 
-def _fetch_lyrics(title: str, artist: str, audio_path: Path) -> str:
+def _fetch_lyrics(title: str, artist: str, audio_path: Path, duration_sec: float) -> str:
     """Fetch lyrics from local .txt file, falling back to LLM (DeepSeek)."""
     # 1. Try local .txt file first (most reliable)
     txt_path = audio_path.with_suffix(".txt")
     if txt_path.exists():
         lyrics = txt_path.read_text(encoding="utf-8").strip()
         if len(lyrics) > 20:
-            log.info(f"Using local lyrics from {txt_path.name}")
-            return lyrics
-        log.warning(f"Local lyrics too short ({len(lyrics)} chars), trying LLM...")
+            # Check if lyrics are plausibly long enough for the song duration
+            words = len(lyrics.split())
+            min_expected = max(50, int(duration_sec * 0.3))
+            if words >= min_expected:
+                log.info(f"Using local lyrics from {txt_path.name} ({words} words)")
+                return lyrics
+            log.warning(f"Local lyrics seem short ({words} words for {duration_sec:.0f}s song), trying LLM for full version...")
 
     # 2. Fall back to LLM
     log.info("Asking LLM for full lyrics...")
     from core.llm import chat_with_fallback
 
+    # Include full filename context for better accuracy
+    filename = audio_path.stem
     artist_line = f" by {artist}" if artist != "Unknown Artist" else ""
     prompt = (
-        f"Return the COMPLETE lyrics for the song \"{title}\"{artist_line}.\n"
-        f"Include ALL verses, choruses, bridges, repeats, tags, and vamp/outro sections.\n"
-        f"Do not truncate or summarise. Return ONLY the lyrics, no commentary."
+        f"Return the COMPLETE lyrics for the song \"{title}\"{artist_line} (filename: \"{filename}\").\n"
+        f"The song is approximately {int(duration_sec // 60)}:{int(duration_sec % 60):02d} long.\n"
+        f"Include ALL verses, choruses, bridges, repeats, tags, vamp/outro, and ad-libs.\n"
+        f"Do not truncate or summarise. Return ONLY the lyrics, no commentary, no section headers."
     )
 
     try:
         raw = chat_with_fallback([
-            {"role": "system", "content": "You are a lyrics database. Return complete song lyrics with no additional text."},
+            {"role": "system", "content": "You are a lyrics database. Return complete, verbatim song lyrics with no additional text or formatting."},
             {"role": "user", "content": prompt},
         ])
         if raw and len(raw.strip()) > 20:
-            log.info(f"LLM returned {len(raw.split())} words of lyrics")
+            words = len(raw.split())
+            log.info(f"LLM returned {words} words of lyrics")
+            # Only use LLM output if it's longer than the local file
+            if txt_path.exists():
+                local_words = len(txt_path.read_text(encoding="utf-8").strip().split())
+                if words <= local_words:
+                    log.warning(f"LLM lyrics not longer than local ({words} vs {local_words}), keeping local")
+                    return txt_path.read_text(encoding="utf-8").strip()
             return raw.strip()
     except Exception as e:
         log.error(f"LLM lyrics fetch failed: {e}")
 
-    # 3. Retry local .txt one more time (in case it was too short before)
+    # 3. Retry local .txt one more time
     if txt_path.exists():
         lyrics = txt_path.read_text(encoding="utf-8").strip()
         if len(lyrics) > 20:
-            log.warning(f"LLM failed, falling back to local lyrics ({len(lyrics)} chars)")
+            log.warning(f"LLM failed, using local lyrics ({len(lyrics.split())} words)")
             return lyrics
 
     raise StageError(1, "No lyrics available — provide a .txt file next to the MP3, or check LLM connectivity")
@@ -145,7 +159,7 @@ def run(state: PipelineState) -> PipelineState:
     meta = _extract_metadata(audio_path)
     log.info(f"  Title: {meta['title']} | Artist: {meta['artist']} | Duration: {meta['duration_sec']:.1f}s")
 
-    lyrics = _fetch_lyrics(meta["title"], meta["artist"], audio_path)
+    lyrics = _fetch_lyrics(meta["title"], meta["artist"], audio_path, meta["duration_sec"])
     log.info(f"  Lyrics: {len(lyrics)} characters")
 
     bundle = AssetBundle(
