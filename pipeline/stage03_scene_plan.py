@@ -124,7 +124,10 @@ def _llm_call(messages: list[dict[str, str]]) -> str:
             model=settings.mistral_model,
             messages=messages,  # type: ignore[arg-type]
         )
-        return (response.choices[0].message.content or "") if response.choices else ""
+        if response.choices:
+            content = response.choices[0].message.content
+            return content if isinstance(content, str) else str(content)
+        return ""
 
 
 def _build_prompt(state: PipelineState) -> str:

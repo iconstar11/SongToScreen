@@ -18,7 +18,7 @@ def _extract_keyframes(video_path, output_dir):
     subprocess.run([
         "ffmpeg", "-y", "-loglevel", "error",
         "-i", str(video_path),
-        "-vf", "select=gt(scene\,0.4),scale=1920:1080",
+        "-vf", r"select=gt(scene\,0.4),scale=1920:1080",
         "-vsync", "vfr", "-frames:v", str(THUMB_COUNT),
         str(output_dir / "thumb_%d.jpg")
     ], capture_output=True, text=True)
@@ -29,7 +29,7 @@ def _extract_keyframes(video_path, output_dir):
 def _score_frame(frame_path):
     """Score a frame by brightness variance. Higher = better. Rejects near-black/white."""
     img = Image.open(frame_path).convert("L")
-    pixels = list(img.getdata())
+    pixels = list(img.getdata())  # type: ignore[arg-type]
     mean = sum(pixels) / len(pixels)
     # Reject near-black (< 30) or near-white (> 225)
     if mean < 30 or mean > 225:
