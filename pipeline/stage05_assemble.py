@@ -1,12 +1,14 @@
 import json, subprocess, tempfile
 from pathlib import Path
 import numpy as np
+from mutagen.mp3 import MP3
 from core.checkpoint import PipelineState
 from core.config import settings
 from core.logger import log
 
 BEAT_SNAP_MS = 80
 OUTPUT_W, OUTPUT_H = 1920, 1080
+FPS = 30
 
 def _snap_to_beat(time_ms, beats_ms):
     arr = np.array(beats_ms)
@@ -37,12 +39,12 @@ def _render_clip(scene, asset_path, scene_type, duration, tmp_dir, index):
             str(out_path)
         ])
     elif scene_type == "still_motion":
+        zoom_frames = max(int(duration * FPS), 30)
         _run_ffmpeg([
-            "-loop", "1", "-framerate", "30", "-i", asset_path,
+            "-loop", "1", "-framerate", str(FPS), "-i", asset_path,
             "-vf", (f"scale={OUTPUT_W}:{OUTPUT_H}:force_original_aspect_ratio=decrease,"
                     f"pad={OUTPUT_W}:{OUTPUT_H}:(ow-iw)/2:(oh-ih)/2,"
-                    f"zoompan=z='min(zoom+0.001,1.05)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=125:s={OUTPUT_W}x{OUTPUT_H},"
-                    f"trim=duration={duration},setpts=PTS-STARTPTS"),
+                    f"zoompan=z='min(zoom+0.0015,1.06)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d={zoom_frames}:s={OUTPUT_W}x{OUTPUT_H}"),
             "-t", str(duration),
             "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
             "-pix_fmt", "yuv420p", "-an",
@@ -63,6 +65,19 @@ def _render_clip(scene, asset_path, scene_type, duration, tmp_dir, index):
 
     return out_path
 
+def _render_gap(duration, tmp_dir, index):
+    """Render a silent black clip for a gap between scenes."""
+    out_path = tmp_dir / f"gap_{index:04d}.mp4"
+    _run_ffmpeg([
+        "-f", "lavfi", "-i", f"color=c=black:s={OUTPUT_W}x{OUTPUT_H}:d={duration}:r={FPS}",
+        "-t", str(duration),
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-an",
+        str(out_path)
+    ])
+    return out_path
+
+
 def run(state):
     log.info(f"Stage 5: Assembling video for {state.song_slug}")
 
@@ -71,20 +86,48 @@ def run(state):
     beats_data = json.loads(state.beats_path.read_text(encoding="utf-8"))
     beats_ms = beats_data["beats_ms"]
 
+    # Get full song duration from the audio file
+    song_duration = MP3(state.song_path).info.length
+
     tmp_dir = Path(tempfile.mkdtemp(prefix="stage05_"))
     clip_list_path = tmp_dir / "clips.txt"
     clip_files = []
+    gap_total = 0.0
 
     log.info(f"  Rendering {min(len(scenes), len(resolved))} clips...")
+    prev_end_ms = 0
     for i, scene in enumerate(scenes):
         if i >= len(resolved):
             break
+
+        start_ms = scene.get("start_ms", prev_end_ms)
+        end_ms = scene.get("end_ms", start_ms + int(scene.get("duration", 5.0) * 1000))
+
+        # Insert black gap if there's instrumental space between scenes
+        gap_ms = start_ms - prev_end_ms
+        if gap_ms > 100:
+            gap_duration = gap_ms / 1000.0
+            gap_path = _render_gap(gap_duration, tmp_dir, len(clip_files))
+            clip_files.append(gap_path)
+            gap_total += gap_duration
+
         asset = resolved[i]
-        duration = scene.get("duration", 5.0)
+        duration = (end_ms - start_ms) / 1000.0
         clip_path = _render_clip(
             scene, asset["local_path"], asset["resolved_type"], duration, tmp_dir, i
         )
         clip_files.append(clip_path)
+        prev_end_ms = end_ms
+
+    # Final gap after last lyric until song ends
+    final_gap = song_duration - (prev_end_ms / 1000.0)
+    if final_gap > 0.1:
+        gap_path = _render_gap(final_gap, tmp_dir, len(clip_files))
+        clip_files.append(gap_path)
+        gap_total += final_gap
+
+    if gap_total > 0:
+        log.info(f"  Inserted {gap_total:.1f}s of gap padding across instrumental sections")
 
     # Write concat file list
     with open(clip_list_path, "w") as f:
