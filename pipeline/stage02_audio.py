@@ -66,17 +66,18 @@ def _transcribe(audio_path: Path) -> list[dict]:
             timestamp_granularities=["word"],
         )
 
-        for w in response.words:
-            # OpenAI SDK v2 returns TranscriptionWord objects, not dicts
-            if hasattr(w, "word"):
-                word_text, w_start, w_end = w.word, w.start, w.end
-            else:
-                word_text, w_start, w_end = w["word"], w["start"], w["end"]
-            words.append({
-                "word": word_text,
-                "start_ms": round((w_start + time_offset) * 1000),
-                "end_ms": round((w_end + time_offset) * 1000),
-            })
+        if response.words:
+            for w in response.words:
+                # OpenAI SDK v2 returns TranscriptionWord objects, not dicts
+                if hasattr(w, "word"):
+                    word_text, w_start, w_end = w.word, w.start, w.end
+                else:
+                    word_text, w_start, w_end = w["word"], w["start"], w["end"]
+                words.append({
+                    "word": word_text,
+                    "start_ms": round((w_start + time_offset) * 1000),
+                    "end_ms": round((w_end + time_offset) * 1000),
+                })
 
         # Track chunk duration for offset calculation
         data, sr = sf.read(BytesIO(chunk), dtype="float32")
