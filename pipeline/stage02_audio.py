@@ -1,3 +1,9 @@
+"""
+Stage 2 — Audio analysis: transcribe lyrics via OpenAI Whisper API with
+word-level timestamps, detect tempo and beat positions, and segment the
+track into verse/chorus/bridge regions with mood classification.
+"""
+
 import json
 from io import BytesIO
 from pathlib import Path
@@ -46,7 +52,7 @@ def _chunk_audio(audio_path: Path) -> list[bytes]:
     return chunks
 
 
-def _transcribe(audio_path: Path) -> list[dict]:
+def _transcribe(audio_path: Path, lyrics_text: str | None = None) -> list[dict]:
     """Transcribe via OpenAI Whisper API, return word-level alignment."""
     client = OpenAI(api_key=settings.openai_api_key)
     chunks = _chunk_audio(audio_path)
@@ -81,7 +87,77 @@ def _transcribe(audio_path: Path) -> list[dict]:
         chunk_duration = len(data) / sr
         time_offset += chunk_duration
 
+    # Post-process: use lyrics to correct minor Whisper errors without
+    # overriding genuine ad-libs or variations the performer actually sang.
+    if lyrics_text and len(lyrics_text.strip()) > 20:
+        words = _fuzzy_correct(words, lyrics_text)
+
     return words
+
+
+def _word_distance(a: str, b: str) -> float:
+    """Phonetic similarity score (0-1) between two words."""
+    a = a.lower().strip(",.!?'\"")
+    b = b.lower().strip(",.!?'\"")
+    if not a or not b:
+        return 0.0
+    # Exact match
+    if a == b:
+        return 1.0
+    # Single character difference (your/you're, its/it's)
+    if abs(len(a) - len(b)) <= 1:
+        from difflib import SequenceMatcher
+        return SequenceMatcher(None, a, b).ratio()
+    # Length difference too large — likely different words
+    if abs(len(a) - len(b)) > 3:
+        return 0.0
+    from difflib import SequenceMatcher
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _fuzzy_correct(whisper_words: list[dict], lyrics_text: str) -> list[dict]:
+    """Use known lyrics to correct minor Whisper errors. Only swaps a word
+    when the lyrics word is phonetically very close (score >= 0.75).
+    Ad-libs, variations, and words with no close lyric match are kept as-is."""
+    import re
+    lyrics_words = [w for w in re.findall(r"[A-Za-z']+", lyrics_text)]
+
+    if not lyrics_words:
+        return whisper_words
+
+    corrected_count = 0
+    lyrics_idx = 0
+    window = 8  # search within ±8 words in the lyrics
+
+    for w in whisper_words:
+        whisper_word = w["word"].lower().strip(",.!?'\"")
+
+        # Search for a close lyric match near our current position
+        best_score = 0.0
+        best_idx = lyrics_idx
+
+        for offset in range(-window, window + 1):
+            check_idx = lyrics_idx + offset
+            if 0 <= check_idx < len(lyrics_words):
+                score = _word_distance(whisper_word, lyrics_words[check_idx])
+                if score > best_score:
+                    best_score = score
+                    best_idx = check_idx
+
+        # Only correct if the match is very close (75%+ similarity)
+        if best_score >= 0.75:
+            w["word"] = lyrics_words[best_idx]
+            lyrics_idx = best_idx + 1
+            corrected_count += 1
+        elif best_score >= 0.5:
+            # Moderate match — advance lyrics pointer but keep Whisper's word
+            lyrics_idx = best_idx + 1
+        # else: no match — keep Whisper's word, don't advance lyrics
+
+    if corrected_count > 0:
+        log.info(f"  Lyrics correction: updated {corrected_count}/{len(whisper_words)} words")
+
+    return whisper_words
 
 
 def _detect_beats(audio_path: Path) -> tuple[float, list[int]]:
@@ -175,8 +251,15 @@ def run(state: PipelineState) -> PipelineState:
     audio_path = state.song_path
     log.info(f"Stage 2: Analysing {audio_path.name}")
 
-    # 1. Whisper API transcription
-    words = _transcribe(audio_path)
+    # 1. Load lyrics for correction (if available from Stage 1)
+    lyrics_path = state.output_dir / "lyrics.txt"
+    lyrics_text = None
+    if lyrics_path.exists():
+        lyrics_text = lyrics_path.read_text(encoding="utf-8").strip()
+        log.info(f"  Lyrics reference: {len(lyrics_text.split())} words")
+
+    # 2. Whisper API transcription with optional lyrics correction
+    words = _transcribe(audio_path, lyrics_text)
     log.info(f"  Transcription: {len(words)} words")
 
     alignment_path = state.output_dir / "alignment.json"
