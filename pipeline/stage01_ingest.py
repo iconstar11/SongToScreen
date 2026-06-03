@@ -74,9 +74,7 @@ def _fetch_lyrics(title: str, artist: str, audio_path: Path) -> str:
     """Fetch lyrics via Genius API, falling back to local .txt file."""
     import lyricsgenius
 
-    genius = lyricsgenius.Genius(settings.genius_access_token)
-    genius.verbose = False
-    genius.remove_section_headers = True
+    genius = lyricsgenius.Genius(settings.genius_access_token, remove_section_headers=True)
 
     # Try Genius search
     queries = [f"{title} {artist}", title]
