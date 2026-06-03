@@ -1,3 +1,9 @@
+"""
+Stage 1 — Ingest: read an MP3 file, extract ID3 metadata, fetch lyrics from
+local .txt file (with LLM fallback), create a slug + output directory, and
+return the pipeline state ready for stage 2.
+"""
+
 from pathlib import Path
 
 import mutagen
@@ -71,31 +77,46 @@ def _extract_metadata(audio_path: Path) -> dict:
 
 
 def _fetch_lyrics(title: str, artist: str, audio_path: Path) -> str:
-    """Fetch lyrics via Genius API, falling back to local .txt file."""
-    import lyricsgenius
-
-    genius = lyricsgenius.Genius(settings.genius_access_token, remove_section_headers=True)
-
-    # Try Genius search
-    queries = [f"{title} {artist}", title]
-    for query in queries:
-        try:
-            song = genius.search_song(query, artist=artist if artist != "Unknown Artist" else "")
-            if song and song.lyrics and len(song.lyrics.strip()) > 20:
-                return song.lyrics.strip()
-        except Exception as e:
-            log.debug(f"Genius search failed for '{query}': {e}")
-            continue
-
-    # Fallback to local .txt
+    """Fetch lyrics from local .txt file, falling back to LLM (DeepSeek)."""
+    # 1. Try local .txt file first (most reliable)
     txt_path = audio_path.with_suffix(".txt")
     if txt_path.exists():
         lyrics = txt_path.read_text(encoding="utf-8").strip()
         if len(lyrics) > 20:
             log.info(f"Using local lyrics from {txt_path.name}")
             return lyrics
+        log.warning(f"Local lyrics too short ({len(lyrics)} chars), trying LLM...")
 
-    raise StageError(1, "No lyrics available — Genius API failed and no local .txt file found")
+    # 2. Fall back to LLM
+    log.info("Asking LLM for full lyrics...")
+    from core.llm import chat_with_fallback
+
+    artist_line = f" by {artist}" if artist != "Unknown Artist" else ""
+    prompt = (
+        f"Return the COMPLETE lyrics for the song \"{title}\"{artist_line}.\n"
+        f"Include ALL verses, choruses, bridges, repeats, tags, and vamp/outro sections.\n"
+        f"Do not truncate or summarise. Return ONLY the lyrics, no commentary."
+    )
+
+    try:
+        raw = chat_with_fallback([
+            {"role": "system", "content": "You are a lyrics database. Return complete song lyrics with no additional text."},
+            {"role": "user", "content": prompt},
+        ])
+        if raw and len(raw.strip()) > 20:
+            log.info(f"LLM returned {len(raw.split())} words of lyrics")
+            return raw.strip()
+    except Exception as e:
+        log.error(f"LLM lyrics fetch failed: {e}")
+
+    # 3. Retry local .txt one more time (in case it was too short before)
+    if txt_path.exists():
+        lyrics = txt_path.read_text(encoding="utf-8").strip()
+        if len(lyrics) > 20:
+            log.warning(f"LLM failed, falling back to local lyrics ({len(lyrics)} chars)")
+            return lyrics
+
+    raise StageError(1, "No lyrics available — provide a .txt file next to the MP3, or check LLM connectivity")
 
 
 def _create_slug(title: str, artist: str) -> str:

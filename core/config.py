@@ -17,10 +17,6 @@ class Settings(BaseSettings):
     pexels_api_key: str = ""
     pixabay_api_key: str = ""
 
-    # Lyrics
-    genius_access_token: str = ""
-    genius_base_url: str = "https://api.genius.com"
-
     # YouTube
     youtube_client_secrets_path: Path = Path("secrets/client_secrets.json")
 

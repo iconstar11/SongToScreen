@@ -4,7 +4,7 @@ python-dotenv>=1.0
 loguru>=0.7
 watchdog>=4.0
 mutagen>=1.46
-lyricsgenius>=3.0
+
 openai>=1.0
 mistralai>=1.0
 instructor>=1.0
