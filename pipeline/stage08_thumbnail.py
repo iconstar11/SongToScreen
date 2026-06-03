@@ -67,24 +67,27 @@ def _apply_thumbnail_template(frame_path, output_path, title, artist):
 
     img.save(output_path, "JPEG", quality=90)
 
-def _llm_chat(messages):
+def _llm_chat(messages: list[dict[str, str]]) -> str:
     """Call DeepSeek primary, Mistral fallback."""
     client = get_deepseek_client()
     try:
         response = client.chat.completions.create(
             model=settings.deepseek_model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             timeout=15,
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
     except (RateLimitError, APITimeoutError) as e:
         log.warning(f"  DeepSeek failed ({e}), switching to Mistral")
         mistral = Mistral(api_key=settings.mistral_api_key)
         response = mistral.chat.complete(
             model=settings.mistral_model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
         )
-        return response.choices[0].message.content
+        if response.choices:
+            content = response.choices[0].message.content
+            return content if isinstance(content, str) else str(content)
+        return ""
 
 def _extract_json(raw):
     """Extract JSON object from LLM response."""
