@@ -107,28 +107,30 @@ def _normalize_scene(scene: dict, index: int) -> dict:
     return scene
 
 
-def _llm_call(messages: list[dict]) -> str:
+def _llm_call(messages: list[dict[str, str]]) -> str:
     """Call LLM with DeepSeek primary, Mistral fallback. Returns raw content."""
     client = get_deepseek_client()
     try:
         response = client.chat.completions.create(
             model=settings.deepseek_model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
             timeout=15,
         )
-        return response.choices[0].message.content
+        return response.choices[0].message.content or ""
     except (RateLimitError, APITimeoutError) as e:
         log.warning(f"  DeepSeek failed ({e}), switching to Mistral")
         mistral = Mistral(api_key=settings.mistral_api_key)
         response = mistral.chat.complete(
             model=settings.mistral_model,
-            messages=messages,
+            messages=messages,  # type: ignore[arg-type]
         )
-        return response.choices[0].message.content
+        return (response.choices[0].message.content or "") if response.choices else ""
 
 
 def _build_prompt(state: PipelineState) -> str:
     """Render the Jinja2 prompt template with song data."""
+    if not state.alignment_path or not state.segments_path:
+        raise RuntimeError("Stage 3 requires alignment.json and segments.json from Stage 2")
     alignment = json.loads(state.alignment_path.read_text(encoding="utf-8"))
     segments = json.loads(state.segments_path.read_text(encoding="utf-8"))
 
@@ -215,6 +217,8 @@ def run(state: PipelineState) -> PipelineState:
         log.warning(f"  LLM failed ({e}), using rule-based plan")
 
     if scenes is None:
+        if not state.alignment_path or not state.segments_path:
+            raise RuntimeError("Stage 3 fallback requires alignment.json and segments.json from Stage 2")
         alignment = json.loads(state.alignment_path.read_text(encoding="utf-8"))
         segments = json.loads(state.segments_path.read_text(encoding="utf-8"))
         segments = _group_words_by_segments(alignment, segments)
