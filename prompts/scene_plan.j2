@@ -1,0 +1,35 @@
+You are a gospel music video director. Given the lyrics, word timings, and song structure below, create a detailed scene-by-scene visual plan for a YouTube karaoke music video.
+
+**Artist:** {{ artist }}
+**Song title:** {{ title }}
+**Total duration:** {{ total_duration_sec }} seconds
+
+**Song structure (segments):**
+{% for seg in segments %}
+- {{ seg.segment_type }} ({{ seg.mood }}): {{ "%.1f"|format(seg.start_ms / 1000) }}s — {{ "%.1f"|format(seg.end_ms / 1000) }}s
+{% endfor %}
+
+**Lyrics with word-level timing:**
+{% for seg in segments %}
+--- {{ seg.segment_type | upper }} ({{ seg.mood }}) [{{ "%.1f"|format(seg.start_ms / 1000) }}s — {{ "%.1f"|format(seg.end_ms / 1000) }}s] ---
+{% for word in seg.words %}
+  {{ word.word }} [{{ word.start_ms }}ms — {{ word.end_ms }}ms]
+{% endfor %}
+{% endfor %}
+
+**Instructions:**
+For each segment in the song structure above, create one or more scene entries. Each scene must cover a continuous section of lyrics with no gaps.
+
+**Rules:**
+1. `scene_type` must be one of: "stock_video", "still_motion", "text_motion"
+2. Use "stock_video" for energetic/triumphant segments — it will pull real worship footage
+3. Use "still_motion" for contemplative segments — a still photo with slow Ken Burns movement
+4. Use "text_motion" only for instrumental sections or very short transitions (< 3s)
+5. `search_terms` should describe the visual in 1–2 English phrases suitable for stock footage search
+6. `visual_mood` should be 2–4 adjectives describing the emotional tone
+7. `camera_motion` should describe the intended camera movement: "slow_push_in", "wide_static", "gentle_pan", "slow_zoom_out"
+8. `transition_in` and `transition_out` should be: "fade", "dissolve", or "cut"
+9. `caption_style` should always be "karaoke_2line"
+10. Keep each scene between 3 and 10 seconds where possible
+
+Return a JSON array of scenes.
