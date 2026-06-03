@@ -137,10 +137,13 @@ def run(state):
     master_path = state.output_dir / "master_16x9.mp4"
 
     # Concat all clips, add audio, apply global filters
+    # -fflags +genpts regenerates clean timestamps; -r forces uniform framerate
     log.info(f"  Concatenating and applying colour grade + loudnorm...")
     _run_ffmpeg([
+        "-fflags", "+genpts",
         "-f", "concat", "-safe", "0", "-i", str(clip_list_path),
         "-i", str(state.song_path),
+        "-r", str(FPS),
         "-vf", (f"eq=contrast=1.08:saturation=1.15:brightness=-0.02,"
                 f"format=yuv420p"),
         "-af", "loudnorm=I=-16:LRA=11:TP=-1.5",
